@@ -1,0 +1,25 @@
+# Large build artifacts
+output/
+output;C/
+*.img
+*.zip
+*.tar.gz
+
+# Build logs (regenerable)
+*.log
+
+# Third-party kernel/ROM sources (cloned, not authored here)
+AnyKernel3/
+AnyKernel3;C/
+Evolution-X build*/
+sukisu_apk_check/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
