@@ -181,8 +181,17 @@ cmd_build() {
     [ -x "${CACHE_DIR}/clang/bin/clang" ] || die "clang not fetched (run: build.sh fetch)"
     [ -f "${KERNEL_DIR}/tools/build.sh" ] || die "kernel not fetched (run: build.sh fetch)"
     mkdir -p "${OUT_DIR}" "${CCACHE_HOST_DIR}"
-    local zip_name="VanillaKernel-thin-${KERNEL_SHA:0:7}-${VANILLASU_SHA:0:7}.zip" start
+    local zip_name="VanillaKernel-thin-${KERNEL_SHA:0:7}-${VANILLASU_SHA:0:7}.zip" start sampler
     start="$(now)"
+    # Sample the container's working set (docker stats: usage minus reclaimable page cache) every 10 s.
+    : > "${OUT_DIR}/memory.csv"
+    (
+        while true; do
+            docker stats --no-stream --format '{{.MemUsage}}' op9thin-build 2> /dev/null >> "${OUT_DIR}/memory.csv" || true
+            sleep 10
+        done
+    ) &
+    sampler=$!
     # --memory-swap equal to --memory: no swap, so the 8 GB limit is a real limit.
     docker run --rm --name op9thin-build \
         --user "$(id -u):$(id -g)" \
@@ -192,8 +201,13 @@ cmd_build() {
         -v "${KERNEL_DIR}:/src" -v "${CACHE_DIR}/clang/:/clang:ro" -v "${CCACHE_HOST_DIR}:/ccache" \
         -v "${OUT_DIR}:/artifacts" \
         "${IMAGE_TAG}" 2>&1 | tee "${OUT_DIR}/build.log"
+    kill "${sampler}" 2> /dev/null || true
     echo "build_seconds=$(($(now) - start))" | tee -a "${METRICS_FILE}"
+    # cgroup peak counts page cache too (it is reclaimable); the working-set peak is the honest RAM need.
     grep -h MEMORY_PEAK_BYTES "${OUT_DIR}/build.log" | tee -a "${METRICS_FILE}" || true
+    awk -F'[ /]+' '{ v = $1; if (v ~ /GiB$/) { sub(/GiB/, "", v); v *= 1024 } else if (v ~ /MiB$/) { sub(/MiB/, "", v) } else next
+                     if (v > m) m = v } END { printf "peak_working_set_mib=%d\n", m }' "${OUT_DIR}/memory.csv" |
+        tee -a "${METRICS_FILE}"
 }
 
 cmd_verify() {
@@ -227,15 +241,35 @@ cmd_verify() {
     (cd "${OUT_DIR}" && sha256sum ./*.zip Image.gz config | tee SHA256SUMS)
 }
 
+# stage NAME COMMAND... - run one pipeline stage and append its wall seconds to metrics.txt.
+stage() {
+    local name="$1" t
+    shift
+    t="$(now)"
+    "$@"
+    echo "${name}_seconds=$(($(now) - t))" | tee -a "${METRICS_FILE}"
+}
+
+report_disk() {
+    {
+        echo "disk_mib_clang=$(du -sm "${CACHE_DIR}/clang/" | cut -f1)"
+        echo "disk_mib_ccache=$(du -sm "${CCACHE_HOST_DIR}" | cut -f1)"
+        echo "disk_mib_kernel_tree_with_git=$(du -sm --exclude=out "${KERNEL_DIR}" | cut -f1)"
+        echo "disk_mib_kernel_out=$(du -sm "${KERNEL_DIR}/out" | cut -f1)"
+        echo "disk_mib_container_image=$(($(docker image inspect "${IMAGE_TAG}" --format '{{.Size}}') / 1048576))"
+    } | tee -a "${METRICS_FILE}"
+}
+
 cmd_all() {
-    local start t
+    local start
     start="$(now)"
     mkdir -p "${OUT_DIR}"
-    t="$(now)"; cmd_fetch; echo "fetch_seconds=$(($(now) - t))" | tee -a "${METRICS_FILE}"
-    cmd_patch
-    cmd_image
+    stage fetch cmd_fetch
+    stage patch cmd_patch
+    stage image cmd_image
     cmd_build
-    cmd_verify
+    stage verify cmd_verify
+    report_disk
     echo "total_seconds=$(($(now) - start))" | tee -a "${METRICS_FILE}"
 }
 

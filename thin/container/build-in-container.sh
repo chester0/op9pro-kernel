@@ -19,6 +19,14 @@ ccache -z
 
 clang --version | head -n 1
 
+# Reproducibility: the kernel banner embeds user, host and build time. Fix them to constants derived from the
+# pinned commit, so the same inputs give the same Image.gz (a rebuild's sha256 must equal the first build's).
+epoch="$(git show -s --format=%ct HEAD)"
+export KBUILD_BUILD_USER=thin
+export KBUILD_BUILD_HOST=op9pro-thin
+export KBUILD_BUILD_TIMESTAMP
+KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${epoch}")"
+
 ./tools/build.sh config "${BASE_DEFCONFIG}" "${FRAGMENT_DEFCONFIG}"
 ./tools/check-fragment.sh "${FRAGMENT_DEFCONFIG}" out/.config
 ./tools/build.sh kernel
@@ -33,7 +41,6 @@ test -f "${IMAGE}"
 package_dir="$(mktemp -d)"
 cp -a tools/anykernel3/. "${package_dir}/"
 cp "${IMAGE}" "${package_dir}/"
-epoch="$(git show -s --format=%ct HEAD)"
 find "${package_dir}" -exec touch -h -d "@${epoch}" {} +
 (cd "${package_dir}" && find . -mindepth 1 | LC_ALL=C sort | zip -X -9 -@ "/artifacts/${ZIP_NAME}" > /dev/null)
 cp "${IMAGE}" /artifacts/Image.gz
