@@ -93,8 +93,8 @@ main() {
     fi
     route_fix
     say "dockerd up, pid $(dockerd_pid), network mode $(cat "$DOCKER_MODE_FILE")"
-    if grep -q " - tmpfs dockercg " "$DOCKER_INIT_MOUNTINFO" 2>/dev/null; then
-        say "WARN: Docker's cgroup tmpfs is visible in the global namespace - run docker-down.sh and send diag.txt"
+    if grep -qE " - (tmpfs (dockercg|dockeretc|dockerov)|overlay dockerroot) " "$DOCKER_INIT_MOUNTINFO" 2>/dev/null; then
+        say "WARN: one of Docker's mounts (cgroup/etc tmpfs, root overlay) is visible in the global namespace - run docker-down.sh and send diag.txt"
     else
         say "isolation check: Android's own mounts untouched"
     fi

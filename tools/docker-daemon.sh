@@ -10,45 +10,28 @@
 # mounts exist for dockerd and its containers only; the rest of Android never sees them.
 # Sources: https://gist.github.com/hnmn/b110d3840af8653d077d42382454eccb (cgroup wrapper),
 # https://github.com/CGCL-codes/Android-Container/blob/main/files/dockerd.sh.
+#
+# Order: / private -> cgroup tmpfs -> /system/etc tmpfs -> overlay root view (docker-namespace.sh,
+# binds the two tmpfs in with every other mount) -> `exec chroot <view> dockerd`, so dockerd sees a
+# writable /run and the pidfile pid is still this process.
 
 DIR=$(dirname "$0")
 # shellcheck source=docker-common.sh
 . "$DIR/docker-common.sh"
+# shellcheck disable=SC2034  # read by log() in docker-namespace.sh
+LOG_TAG=docker-daemon
+# shellcheck source=docker-namespace.sh
+. "$DIR/docker-namespace.sh"
 
 CG="${DOCKER_CGROUP_DIR:-/sys/fs/cgroup}"   # overridable for the offline tests
 ETC_DIR="${DOCKER_ETC_DIR:-/system/etc}"
 CG_OPTS=rw,nosuid,nodev,noexec,relatime
 REQUIRED_CONTROLLERS="cpuset cpu memory pids devices"
 
-log() { printf '%s docker-daemon: %s\n' "$(date '+%F %T')" "$*"; }
-
-# Android's toybox 0.8.12 (9 Pro, 2026-10-30): `--make-rprivate /` fails (it reads /etc/fstab) and
-# `-o rprivate / /` returns 0 but leaves / shared; only `-o rprivate none /` takes. So the result is
-# read back from mountinfo, never trusted from the exit code.
-root_is_private() {
-    ! grep -E '^[0-9]+ [0-9]+ [^ ]+ / / ' "${DOCKER_SELF_MOUNTINFO:-/proc/self/mountinfo}" 2>/dev/null | grep -q ' shared:'
-}
-
-make_mounts_private() {
-    mount -o rprivate none / 2>/dev/null || mount --make-rprivate / 2>/dev/null
-    root_is_private || die "could not make / private in dockerd's namespace; aborted before touching Android"
-}
-
-# The tmpfs must never be visible in init's namespace. Check, and abort if it leaked.
-# Match OUR mount by its source name (`- tmpfs <source> `), never by the mount point: Android
-# already mounts its own cgroup2 at /sys/fs/cgroup in init's namespace, so a mount-point match
-# fired on the 9 Pro's first start (2026-10-30) although nothing had leaked.
-assert_isolated() { # mount-point source-name
-    if grep -q " - tmpfs $2 " "$DOCKER_INIT_MOUNTINFO" 2>/dev/null; then
-        umount "$1" 2>/dev/null
-        die "mount $1 leaked into the global namespace (could not make / private); aborted before touching Android"
-    fi
-}
-
 setup_cgroups() {
     mkdir -p "$CG"
     mount -t tmpfs -o "$CG_OPTS,mode=755" dockercg "$CG" || die "tmpfs on $CG failed"
-    assert_isolated "$CG" dockercg
+    assert_isolated "$CG" tmpfs dockercg
     mounted=
     enabled=$(awk 'NR>1 && $4==1 {print $1}' /proc/cgroups)
     for ctl in $enabled; do
@@ -88,7 +71,7 @@ setup_etc() {
     mkdir -p "$orig"
     mount --bind "$ETC_DIR" "$orig" || die "bind of $ETC_DIR failed"
     mount -t tmpfs -o mode=755 dockeretc "$ETC_DIR" || die "tmpfs on $ETC_DIR failed"
-    assert_isolated "$ETC_DIR" dockeretc
+    assert_isolated "$ETC_DIR" tmpfs dockeretc
     for entry in "$orig"/*; do
         [ -e "$entry" ] || continue
         name=$(basename "$entry")
@@ -132,6 +115,7 @@ main() {
     make_mounts_private
     setup_cgroups
     setup_etc
+    build_root_view
 
     driver=$(pick_storage_driver)
     mode=$(pick_network_mode)
@@ -158,7 +142,7 @@ EOF
     fi
 
     # shellcheck disable=SC2086  # net_flags is a deliberate word list
-    exec dockerd \
+    exec chroot "$DOCKER_NEWROOT" "$DOCKER_BIN/dockerd" \
         --config-file "$DOCKER_BASE/daemon.json" \
         --data-root "$DOCKER_ROOT" \
         --exec-root "$DOCKER_RUN" \

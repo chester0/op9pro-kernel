@@ -7,7 +7,8 @@ nothing has run on the phone yet. Kai runs the sequence below and sends back wha
 ## The path chosen, and why (least fragile)
 
 **The official static Docker bundle, run directly on the Android host as root, with `dockerd` inside a
-private mount namespace.** No chroot, no second userland, no Termux build of Docker.
+private mount namespace.** No second userland (the only chroot is into an overlay of Android's own `/`, see
+problem 3), no Termux build of Docker.
 
 | Option | Verdict |
 |---|---|
@@ -28,6 +29,19 @@ Two Android problems the plain recipes solve badly, and what we do instead:
 2. **No `/etc/resolv.conf`.** Android has none and Go (dockerd, containerd) then asks 127.0.0.1:53, so
    image pulls fail. Inside the same private namespace a tmpfs replaces `/system/etc` (entries symlinked
    back, plus a `resolv.conf`). `/system` itself is never written.
+3. **No `/run`, read-only `/`.** moby hardcodes `/run/docker/plugins` (found on the 9 Pro, 2026-10-30:
+   `mkdir /run: read-only file system`), runc `/run/docker/runtime-runc`, libnetwork `/var/run/docker/netns`.
+   Android's `/` is a read-only ext4 (dm-2) with no `/run`; remounting it rw would write the system partition for
+   the whole phone, which CGCL's `dockerd.sh` does (`mount -o rw,remount /`, then `mount --bind /data/run /run`).
+   Instead, inside the same private namespace (`tools/docker-namespace.sh`): an **overlay with `lowerdir=/`** and
+   upper+work on a tmpfs (fallback: a dir under `/data/docker/ov`) is mounted on `/data/docker/newroot`;
+   `/run`, `/tmp`, `/var/run -> /run` are made in the upper; every other mount of the namespace (`/proc`, `/dev`,
+   `/sys` with the cgroup tmpfs, `/data`, `/apex`, `/linkerconfig`, the `/system/etc` tmpfs, ...) is bound in
+   one by one (read from `/proc/self/mountinfo`, parents first, because overlayfs does not follow the lower's
+   submounts); then `exec chroot <newroot> dockerd`. Guards: `/` private (read back from mountinfo), and none of
+   our mounts (cgroup tmpfs, etc tmpfs, upper tmpfs, **the overlay**) may appear in `/proc/1/mountinfo`.
+   `docker-down.sh` removes the empty mount-point dir and the upper dir. Run `tools/docker-probe-root.sh` once
+   first: it builds the same view in a throwaway namespace and prints what worked.
 
 Other decisions: data-root `/data/docker/root` (never `/system`), overlay2 if a probe mount works else vfs,
 `ipv6: false`, `ip-forward-no-drop` (Docker will not set the FORWARD policy to DROP on Android),
@@ -50,7 +64,9 @@ https://github.com/docker/compose/releases/tag/v5.6.1 . Docker's own `contrib/ch
 | `tools/docker-pin.json` | - | pinned versions and sha256 |
 | `tools/docker-install.sh` | phone | verify sha256 again, unpack to `/data/docker/bin`, copy scripts to `/data/docker/tools` |
 | `tools/docker-up.sh` | phone | start dockerd (idempotent, refuses if running, logs to `/data/docker/log/dockerd.log`) |
-| `tools/docker-daemon.sh` | phone | internal: namespace setup, then `exec dockerd` |
+| `tools/docker-daemon.sh` | phone | internal: namespace setup, then `exec chroot <overlay root> dockerd` |
+| `tools/docker-namespace.sh` | phone | sourced: isolation guards + the overlay root view (one implementation for daemon, probe, down) |
+| `tools/docker-probe-root.sh` | phone | ONE-TIME read-only probe: builds the root view in a throwaway namespace, leaves nothing behind |
 | `tools/docker-down.sh` | phone | stop dockerd, remove the routing rule |
 | `tools/docker-proof.sh` | phone | `hello-world` + `alpine` with networking, one-screen proof |
 | `tools/docker-boot-service.sh` | phone | OPT-IN KernelSU `service.d` script that runs docker-up at boot |
@@ -65,6 +81,8 @@ pwsh tools/push-docker.ps1 -RecordHash
 # 1. dry run, then push + install
 pwsh tools/push-docker.ps1 -Serial 5d7a3c0
 pwsh tools/push-docker.ps1 -Serial 5d7a3c0 -Execute
+# 1b. once: probe the overlay root view (throwaway namespace; paste the whole output back)
+adb -s 5d7a3c0 shell "su -c 'sh /data/docker/tools/docker-probe-root.sh'"
 # 2. start
 adb -s 5d7a3c0 shell "su -c 'sh /data/docker/tools/docker-up.sh'"
 # 3. proof
@@ -90,6 +108,7 @@ filesystem, ip rules and default routes. Likely first failures and the switch fo
 * AVC denials in `dmesg` / "permission denied" in runc -> retry once with `docker-up.sh --selinux-permissive`
   (global until reboot; deliberately not the default).
 * "leaked into the global namespace" -> `mount --make-rprivate /` unsupported by this toybox; send diag.txt.
+* "overlay root refused" / probe FAIL -> send the probe output and `dmesg | grep -i overlay`.
 * Containers start but no internet -> send `ip rule` and `ip route show table all | grep default`.
 
 ## Roles (compose files, Docker Compose standalone: `docker-compose`)
