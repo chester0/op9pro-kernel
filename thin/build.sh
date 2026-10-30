@@ -18,6 +18,7 @@
 #   BUILD_JOBS  make -j (default 8)                           BUILD_MEM  container memory limit (default 8g)
 #   OUT_DIR     where finished artifacts are copied (default: $THIN_HOME/out/thin-<date>)
 #   THIN_PATCHES=none   build the maintainer's unpatched source (baseline for A/B comparison)
+#   THIN_SKIP=ipvs      skip every patch whose file name contains a word of this comma-separated list
 set -euo pipefail
 
 THIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -153,6 +154,16 @@ cmd_fetch() {
     fetch_apksign_ref
 }
 
+# patch_skipped PATCH - true when THIN_SKIP (comma-separated words) names part of the patch's file name.
+patch_skipped() {
+    local word
+    local skip="${THIN_SKIP:-}"
+    for word in ${skip//,/ }; do
+        case "$(basename "$1")" in *"${word}"*) return 0 ;; esac
+    done
+    return 1
+}
+
 apply_dir() {
     local tree="$1" patch_dir="$2" patch
     [ -d "${tree}/.git" ] || die "tree not fetched: ${tree}"
@@ -160,6 +171,10 @@ apply_dir() {
     git -C "${tree}" checkout -q -- .
     for patch in "${patch_dir}"/*.patch; do
         [ -e "${patch}" ] || continue
+        if patch_skipped "${patch}"; then
+            log "skipping $(basename "${patch}") (THIN_SKIP=${THIN_SKIP:-})"
+            continue
+        fi
         log "applying $(basename "${patch}") to ${tree}"
         git -C "${tree}" apply --check "${patch}" || die "patch does not apply: ${patch}"
         git -C "${tree}" apply "${patch}"
@@ -199,7 +214,7 @@ cmd_build() {
     [ -x "${CACHE_DIR}/clang/bin/clang" ] || die "clang not fetched (run: build.sh fetch)"
     [ -f "${KERNEL_DIR}/tools/build.sh" ] || die "kernel not fetched (run: build.sh fetch)"
     mkdir -p "${OUT_DIR}" "${CCACHE_HOST_DIR}"
-    local zip_name="VanillaKernel-thin-${KERNEL_SHA:0:7}-${VANILLASU_SHA:0:7}.zip" start sampler
+    local zip_name="VanillaKernel-thin${THIN_SKIP:+-skip-${THIN_SKIP//,/-}}-${KERNEL_SHA:0:7}-${VANILLASU_SHA:0:7}.zip" start sampler
     start="$(now)"
     # Sample the container's working set (docker stats: usage minus reclaimable page cache) every 10 s.
     : > "${OUT_DIR}/memory.csv"
@@ -234,7 +249,11 @@ cmd_verify() {
     [ -f "${cfg}" ] || die "no built .config at ${cfg} (run: build.sh build)"
 
     log "docker options in the built .config:"
-    for opt in CONFIG_IP6_NF_NAT CONFIG_IP6_NF_TARGET_MASQUERADE CONFIG_NETFILTER_XT_MATCH_IPVS CONFIG_IP_VS; do
+    local options=(CONFIG_IP6_NF_NAT CONFIG_IP6_NF_TARGET_MASQUERADE)
+    if ! patch_skipped ipvs; then
+        options+=(CONFIG_NETFILTER_XT_MATCH_IPVS CONFIG_IP_VS)
+    fi
+    for opt in "${options[@]}"; do
         grep -x "${opt}=y" "${cfg}" || die "${opt}=y is not in the built .config"
     done
 
@@ -303,5 +322,5 @@ case "${1:-}" in
     build) cmd_build ;;
     verify) cmd_verify ;;
     crc) cmd_crc ;;
-    *) sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 2 ;;
+    *) sed -n '2,23p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac
