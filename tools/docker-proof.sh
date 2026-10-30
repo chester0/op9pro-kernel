@@ -22,7 +22,7 @@ main() {
     say "network mode: $(cat "$DOCKER_MODE_FILE" 2>/dev/null)"
 
     section "docker info (summary)"
-    docker info --format 'server {{.ServerVersion}} | driver {{.Driver}} | cgroup {{.CgroupDriver}} v{{.CgroupVersion}} | runc {{index .Runtimes "runc" "path"}} | cpus {{.NCPU}} | mem {{.MemTotal}}' ||
+    docker info --format 'server {{.ServerVersion}} | driver {{.Driver}} | cgroup {{.CgroupDriver}} v{{.CgroupVersion}} | cpus {{.NCPU}} | mem {{.MemTotal}}' ||
         { FAIL=1; say "docker info FAILED"; }
 
     section "hello-world"

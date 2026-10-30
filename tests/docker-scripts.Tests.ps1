@@ -64,6 +64,7 @@ exit 0
         # dockerd stub: records its flags, writes the pidfile and the socket, then idles
         Write-Stub $bin 'dockerd' @'
 echo "$*" > "$DOCKER_BASE/dockerd.args"
+echo "$SSL_CERT_DIR" > "$DOCKER_BASE/dockerd.certdir"
 while [ $# -gt 0 ]; do case "$1" in --pidfile) pf="$2";; --host) sock="${2#unix://}";; esac; shift; done
 echo $$ > "$pf"; : > "$sock"
 trap 'exit 0' TERM
@@ -147,6 +148,8 @@ Describe 'docker-up.sh / docker-down.sh' {
             (Get-Content (Join-Path $base 'run/mode')) | Should -Be 'bridge'
             (Get-Content (Join-Path $base 'daemon.json') -Raw) | Should -Match '"storage-driver": "overlay2"'
             (Get-Content (Join-Path $base 'dockerd.args') -Raw) | Should -Match '--data-root \S*/root'
+            # Android's CA roots, or every registry pull fails x509 (9 Pro, 2026-10-31)
+            (Get-Content (Join-Path $base 'dockerd.certdir') -Raw) | Should -Match '^/apex/com\.android\.conscrypt/cacerts:/system/etc/security/cacerts'
             $pid1 = (Get-Content (Join-Path $base 'run/docker.pid'))
 
             $second = Invoke-Sh $base 'docker-up.sh'

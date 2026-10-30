@@ -141,6 +141,12 @@ EOF
         net_flags="--iptables=false --bridge=none"
     fi
 
+    # 2026-10-31 (9 Pro): Go looks for CA roots in Linux paths Android does not have, so every registry pull failed
+    # "x509: certificate signed by unknown authority". Android keeps them in the Conscrypt APEX (Android 14+) and the
+    # older system folder; Go reads every PEM file in each SSL_CERT_DIR entry (colon-separated).
+    SSL_CERT_DIR="${DOCKER_CA_DIRS:-/apex/com.android.conscrypt/cacerts:/system/etc/security/cacerts}"
+    export SSL_CERT_DIR
+
     # shellcheck disable=SC2086  # net_flags is a deliberate word list
     exec chroot "$DOCKER_NEWROOT" "$DOCKER_BIN/dockerd" \
         --config-file "$DOCKER_BASE/daemon.json" \
