@@ -1,0 +1,18 @@
+defconfig fragment: IPv6 NAT and MASQUERADE for Docker (CONFIG_IP6_NF_NAT, CONFIG_IP6_NF_TARGET_MASQUERADE).
+Their Kconfig dependencies (NF_CONNTRACK, NETFILTER_ADVANCED, NF_NAT) are already on in the base defconfig.
+Measured 2026-10-31: changes none of the vmlinux exported-symbol CRCs, so vendor modules are not affected.
+Applies in the kernel tree (git apply), pinned at e615f34c7dcb.
+
+--- a/arch/arm64/configs/vanillaKernel-defconfig
++++ b/arch/arm64/configs/vanillaKernel-defconfig
+@@ -103,6 +103,10 @@
+ CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+ CONFIG_BRIDGE_NETFILTER=y
+
++# Docker: IPv6 NAT + masquerade (thin kernel patch set)
++CONFIG_IP6_NF_NAT=y
++CONFIG_IP6_NF_TARGET_MASQUERADE=y
++
+ # NixOS support (xattr on tmpfs)
+ CONFIG_TMPFS_XATTR=y
+

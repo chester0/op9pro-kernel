@@ -1,0 +1,16 @@
+defconfig fragment: the IPVS match for Docker (CONFIG_NETFILTER_XT_MATCH_IPVS, which depends on CONFIG_IP_VS).
+WARNING, measured 2026-10-31: built in, IP_VS adds a field to struct net, which changes 2689 of the 13665
+exported-symbol CRCs of the maintainer's kernel (modversions). Vendor modules built against the maintainer's CRCs
+can then be refused. Skip this patch with THIN_SKIP=ipvs (thin/README.md, "kABI").
+Applies in the kernel tree (git apply), pinned at e615f34c7dcb. Independent of 0001: anchored at the end of the file.
+
+--- a/arch/arm64/configs/vanillaKernel-defconfig
++++ b/arch/arm64/configs/vanillaKernel-defconfig
+@@ -148,3 +148,7 @@
+
+ # Module security
+ CONFIG_MODULE_UNLOAD=y
++
++# Docker: IPVS match, needs IP_VS itself (thin kernel patch set)
++CONFIG_IP_VS=y
++CONFIG_NETFILTER_XT_MATCH_IPVS=y
