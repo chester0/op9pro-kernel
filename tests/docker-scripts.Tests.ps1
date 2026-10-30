@@ -28,7 +28,7 @@ BeforeAll {
 
     # A fresh fake /data/docker with stub binaries; returns the base dir.
     function script:New-FakePhone {
-        param([string]$IptablesRc = '0', [string]$OverlayRc = '0', [string]$Uid = '0')
+        param([string]$IptablesRc = '0', [string]$OverlayRc = '0', [string]$Uid = '0', [switch]$LeakedCgroup)
         $base = Join-Path ([IO.Path]::GetTempPath()) "docker-up-test-$([guid]::NewGuid().ToString('N'))"
         $bin = Join-Path $base 'bin'
         New-Item -ItemType Directory -Path $bin, (Join-Path $base 'etc'), (Join-Path $base 'cg') | Out-Null
@@ -49,6 +49,12 @@ trap 'exit 0' TERM
 while :; do sleep 1; done
 '@
         Write-Stub $bin 'docker' 'exit 0'
+        # init's mount view as on the real 9 Pro: Android's own cgroup2 sits at the same mount point
+        # the daemon covers with its private tmpfs (the 2026-10-30 false "leaked" abort).
+        $cgPoint = ToSh (Join-Path $base 'cg')
+        $lines = @("63 45 0:27 / $cgPoint rw,nosuid,nodev,noexec,relatime shared:18 - cgroup2 none rw")
+        if ($LeakedCgroup) { $lines += "99 45 0:99 / $cgPoint rw,nosuid,nodev,noexec,relatime shared:99 - tmpfs dockercg rw,mode=755" }
+        [IO.File]::WriteAllText((Join-Path $base 'init-mountinfo'), (($lines -join "`n") + "`n"))
         $base
     }
 
@@ -57,6 +63,7 @@ while :; do sleep 1; done
         $env:DOCKER_BASE = ToSh $Base
         $env:DOCKER_ETC_DIR = ToSh (Join-Path $Base 'etc')
         $env:DOCKER_CGROUP_DIR = ToSh (Join-Path $Base 'cg')
+        $env:DOCKER_INIT_MOUNTINFO = ToSh (Join-Path $Base 'init-mountinfo')
         $out = & bash (ToSh (Join-Path $script:Tools $Script)) @Arguments 2>&1 | Out-String
         [pscustomobject]@{ Output = $out; Code = $LASTEXITCODE }
     }
@@ -102,6 +109,16 @@ Describe 'docker-up.sh / docker-down.sh' {
             $second.Code | Should -Be 0
             $second.Output | Should -Match 'already running'
             (Get-Content (Join-Path $base 'run/docker.pid')) | Should -Be $pid1
+        } finally { Stop-Fake $base }
+    }
+
+    It 'aborts before dockerd when its cgroup tmpfs shows in init''s namespace' {
+        $base = New-FakePhone -LeakedCgroup
+        try {
+            $r = Invoke-Sh $base 'docker-up.sh'
+            $r.Code | Should -Not -Be 0
+            $r.Output | Should -Match 'leaked into the global namespace'
+            Test-Path (Join-Path $base 'dockerd.args') | Should -BeFalse
         } finally { Stop-Fake $base }
     }
 

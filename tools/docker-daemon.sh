@@ -27,8 +27,11 @@ make_mounts_private() {
 }
 
 # The tmpfs must never be visible in init's namespace. Check, and abort if it leaked.
-assert_isolated() {
-    if grep -q " $1 " /proc/1/mountinfo 2>/dev/null; then
+# Match OUR mount by its source name (`- tmpfs <source> `), never by the mount point: Android
+# already mounts its own cgroup2 at /sys/fs/cgroup in init's namespace, so a mount-point match
+# fired on the 9 Pro's first start (2026-10-30) although nothing had leaked.
+assert_isolated() { # mount-point source-name
+    if grep -q " - tmpfs $2 " "$DOCKER_INIT_MOUNTINFO" 2>/dev/null; then
         umount "$1" 2>/dev/null
         die "mount $1 leaked into the global namespace (could not make / private); aborted before touching Android"
     fi
@@ -37,7 +40,7 @@ assert_isolated() {
 setup_cgroups() {
     mkdir -p "$CG"
     mount -t tmpfs -o "$CG_OPTS,mode=755" dockercg "$CG" || die "tmpfs on $CG failed"
-    assert_isolated "$CG"
+    assert_isolated "$CG" dockercg
     mounted=
     enabled=$(awk 'NR>1 && $4==1 {print $1}' /proc/cgroups)
     for ctl in $enabled; do
@@ -77,7 +80,7 @@ setup_etc() {
     mkdir -p "$orig"
     mount --bind "$ETC_DIR" "$orig" || die "bind of $ETC_DIR failed"
     mount -t tmpfs -o mode=755 dockeretc "$ETC_DIR" || die "tmpfs on $ETC_DIR failed"
-    assert_isolated "$ETC_DIR"
+    assert_isolated "$ETC_DIR" dockeretc
     for entry in "$orig"/*; do
         [ -e "$entry" ] || continue
         name=$(basename "$entry")

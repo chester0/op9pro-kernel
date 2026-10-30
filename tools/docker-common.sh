@@ -17,6 +17,7 @@ DOCKER_PIDFILE="$DOCKER_RUN/docker.pid"
 DOCKER_LOG="$DOCKER_LOG_DIR/dockerd.log"
 DOCKER_MODE_FILE="$DOCKER_RUN/mode"               # "bridge" or "host-only"
 DOCKER_DIAG="$DOCKER_LOG_DIR/diag.txt"
+DOCKER_INIT_MOUNTINFO="${DOCKER_INIT_MOUNTINFO:-/proc/1/mountinfo}" # init's (Android's global) mount view
 DOCKER_BRIDGE_CIDR="${DOCKER_BRIDGE_CIDR:-172.16.0.0/12}" # gitleaks:allow Docker's default bridge range, not a machine fact
 
 # 2026-10-30: Android has no /etc/resolv.conf, and Go (dockerd) then talks to 127.0.0.1:53.
