@@ -20,7 +20,10 @@
 
 ROOT_OVERLAY_SRC=dockerroot   # source name of OUR overlay: guards match this, never the mount point
 OV_TMPFS_SRC=dockerov
-OV_TMPFS_OPTS=mode=755,size=128m
+# 2026-10-31 (9 Pro, enforcing SELinux): files the overlay creates in a plain tmpfs upper are labelled tmpfs, and the
+# policy refuses `associate` of tmpfs on the overlay (labeledfs): mkdir /run failed with EACCES. Labelling the upper
+# rootfs, like / itself, is what a throwaway probe proved works; system_file is refused at mount.
+OV_TMPFS_OPTS=mode=755,size=128m,context=u:object_r:rootfs:s0
 # Binds that must succeed when they are separate mounts on this ROM; any other failed bind is a warning.
 REQUIRED_MOUNTS="${DOCKER_REQUIRED_MOUNTS:-/proc /dev /sys /data /apex /linkerconfig /system /vendor}"
 SELF_MOUNTINFO="${DOCKER_SELF_MOUNTINFO:-/proc/self/mountinfo}"

@@ -194,7 +194,7 @@ Describe 'docker-up.sh / docker-down.sh' {
             $newroot = ToSh (Join-Path $base 'newroot')
             $mounts = Get-Content (Join-Path $base 'mount.log')
             # tmpfs upper first, then the overlay: lower is /, upper+work are on that tmpfs
-            $mounts | Should -Contain "-t tmpfs -o mode=755,size=128m dockerov $(ToSh (Join-Path $base 'ov'))"
+            $mounts | Should -Contain "-t tmpfs -o mode=755,size=128m,context=u:object_r:rootfs:s0 dockerov $(ToSh (Join-Path $base 'ov'))"
             $mounts | Should -Contain "-t overlay dockerroot -o lowerdir=/,upperdir=$(ToSh (Join-Path $base 'ov'))/upper,workdir=$(ToSh (Join-Path $base 'ov'))/work $newroot"
             $mounts -join "`n" | Should -Not -Match 'remount' -Because 'nothing may remount / writable'
             # dockerd was started through chroot into the overlay, with its flags unchanged
