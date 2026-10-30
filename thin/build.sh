@@ -102,16 +102,34 @@ fetch_kernel() {
     fetch_git "${VANILLASU_URL}" "${VANILLASU_SHA}" "${VANILLASU_DIR}"
 }
 
+# tree_digest DIR - sha256 of the directory's content (names, modes, links, bytes; not mtimes or owners).
+tree_digest() {
+    (cd "$1" && tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - . | sha256sum | cut -d' ' -f1)
+}
+
+# 2026-10-30: googlesource builds the clang .tar.gz on the fly and two downloads of the same commit differ
+# byte for byte (different sha256), so the tarball cannot be pinned. The extracted tree is identical every
+# time (checked with two downloads), so the pin is the digest of the tree.
 fetch_clang() {
     load_pins
-    local tarball="${CACHE_DIR}/${CLANG_NAME}-${CLANG_SHA256:0:12}.tar.gz"
-    local tree="${CACHE_DIR}/${CLANG_NAME}-${CLANG_SHA256:0:12}"
-    fetch_file "${CLANG_URL}" "${CLANG_SHA256}" "${tarball}"
-    if [ ! -x "${tree}/bin/clang" ]; then
+    local tree="${CACHE_DIR}/${CLANG_NAME}-${CLANG_TREE_SHA256:0:12}" tmp got
+    if [ -x "${tree}/bin/clang" ] && [ "$(tree_digest "${tree}")" = "${CLANG_TREE_SHA256}" ]; then
+        log "cached and verified: ${tree}"
+    else
         rm -rf "${tree:?}"
-        mkdir -p "${tree}"
-        tar -xzf "${tarball}" -C "${tree}"
-        [ -x "${tree}/bin/clang" ] || die "clang binary missing after extraction: ${tree}"
+        tmp="${tree}.part"
+        rm -rf "${tmp:?}"
+        mkdir -p "${tmp}"
+        log "downloading ${CLANG_URL}"
+        curl -fsSL --retry 3 --retry-delay 5 "${CLANG_URL}" | tar -xz -C "${tmp}" ||
+            die "download or extraction failed: ${CLANG_URL}"
+        got="$(tree_digest "${tmp}")"
+        if [ "${got}" != "${CLANG_TREE_SHA256}" ]; then
+            rm -rf "${tmp:?}"
+            die "sha256 mismatch for the clang tree from ${CLANG_URL}: pinned ${CLANG_TREE_SHA256}, got ${got}; refusing it"
+        fi
+        [ -x "${tmp}/bin/clang" ] || die "clang binary missing after extraction: ${tmp}"
+        mv "${tmp}" "${tree}"
     fi
     ln -sfn "${tree}" "${CACHE_DIR}/clang"
 }

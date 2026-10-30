@@ -44,11 +44,19 @@ Describe 'thin/build.sh pin checks' -Skip:(-not $script:WslAvailable) {
         $r.ExitCode | Should -Be 0 -Because $r.Output
     }
 
-    It 'refuses a download whose sha256 is not the pin, and keeps nothing' {
+    It 'refuses a toolchain whose tree digest is not the pin, and keeps nothing' {
         $r = Invoke-Build 'bad-clang' 'fetch-clang'
         $r.ExitCode | Should -Not -Be 0
         $r.Output | Should -Match 'sha256 mismatch'
         $left = & wsl -d Ubuntu -- find "$script:Fx/home/cache" -name '*000000000000*'
+        $left | Should -BeNullOrEmpty
+    }
+
+    It 'refuses a downloaded file whose sha256 is not the pin, and keeps nothing' {
+        $r = Invoke-Build 'bad-file' 'fetch-checkconfig'
+        $r.ExitCode | Should -Not -Be 0
+        $r.Output | Should -Match 'sha256 mismatch'
+        $left = & wsl -d Ubuntu -- find "$script:Fx/home/cache" -name 'check-config.sh*'
         $left | Should -BeNullOrEmpty
     }
 
