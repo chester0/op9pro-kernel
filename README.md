@@ -17,6 +17,9 @@ itself, grants root to apps, SUSFS UI is reachable from Settings, and
 basic Play Integrity checks pass (verified: Revolut opens without
 tamper-detection block).
 
+**Docker on the phone (2026-10-30):** `tools/docker-*.sh`, `tools/push-docker.ps1` and `compose/` bring
+Docker up on the 9 Pro and run its planned jobs; see [docs/DOCKER-9PRO.md](docs/DOCKER-9PRO.md).
+
 ---
 
 ## The five hand-ported hook call sites

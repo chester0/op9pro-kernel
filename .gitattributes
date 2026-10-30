@@ -1,0 +1,5 @@
+# 2026-10-30: the phone's sh breaks on CRLF; these files are pushed to it with adb.
+tools/*.sh text eol=lf
+compose/**/*.sh text eol=lf
+compose/**/*.yaml text eol=lf
+compose/**/Dockerfile text eol=lf

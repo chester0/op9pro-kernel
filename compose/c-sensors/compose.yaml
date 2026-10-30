@@ -1,0 +1,19 @@
+# Role C - sensor node. The container does NOT read the sensors: Android's sensor stack is only
+# reachable through the Termux:API app (binder), not from inside a container. So the HOST (Termux)
+# writes JSON lines with host-sensor-logger.sh, and this container picks them up from a shared
+# folder (Termux's home is bind-mounted read-only), keeps a CSV and optionally POSTs to neoClaw.
+name: sensor-node
+services:
+  shipper:
+    image: alpine:3.22
+    restart: unless-stopped
+    network_mode: host
+    init: true
+    environment:
+      SHIP_URL: ""          # e.g. http://100.x.y.z:8080/ingest ; empty = only write the CSV
+      INTERVAL: "60"
+    entrypoint: ["/bin/sh", "/shipper.sh"]
+    volumes:
+      - ./shipper.sh:/shipper.sh:ro
+      - /data/data/com.termux/files/home/sensors:/in:ro
+      - /data/docker/shared/c-sensors:/out
