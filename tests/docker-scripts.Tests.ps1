@@ -28,7 +28,7 @@ BeforeAll {
 
     # A fresh fake /data/docker with stub binaries; returns the base dir.
     function script:New-FakePhone {
-        param([string]$IptablesRc = '0', [string]$OverlayRc = '0', [string]$Uid = '0', [switch]$LeakedCgroup)
+        param([string]$IptablesRc = '0', [string]$OverlayRc = '0', [string]$Uid = '0', [switch]$LeakedCgroup, [switch]$SharedRoot)
         $base = Join-Path ([IO.Path]::GetTempPath()) "docker-up-test-$([guid]::NewGuid().ToString('N'))"
         $bin = Join-Path $base 'bin'
         New-Item -ItemType Directory -Path $bin, (Join-Path $base 'etc'), (Join-Path $base 'cg') | Out-Null
@@ -55,6 +55,10 @@ while :; do sleep 1; done
         $lines = @("63 45 0:27 / $cgPoint rw,nosuid,nodev,noexec,relatime shared:18 - cgroup2 none rw")
         if ($LeakedCgroup) { $lines += "99 45 0:99 / $cgPoint rw,nosuid,nodev,noexec,relatime shared:99 - tmpfs dockercg rw,mode=755" }
         [IO.File]::WriteAllText((Join-Path $base 'init-mountinfo'), (($lines -join "`n") + "`n"))
+        # dockerd's own namespace after make_mounts_private: / private, unless the propagation call silently
+        # did nothing (toybox's `-o rprivate / /` on the 9 Pro, 2026-10-30).
+        $tag = if ($SharedRoot) { ' shared:1' } else { '' }
+        [IO.File]::WriteAllText((Join-Path $base 'self-mountinfo'), "41 40 253:2 / / ro,relatime$tag - ext4 /dev/block/dm-2 ro`n")
         $base
     }
 
@@ -64,6 +68,7 @@ while :; do sleep 1; done
         $env:DOCKER_ETC_DIR = ToSh (Join-Path $Base 'etc')
         $env:DOCKER_CGROUP_DIR = ToSh (Join-Path $Base 'cg')
         $env:DOCKER_INIT_MOUNTINFO = ToSh (Join-Path $Base 'init-mountinfo')
+        $env:DOCKER_SELF_MOUNTINFO = ToSh (Join-Path $Base 'self-mountinfo')
         $out = & bash (ToSh (Join-Path $script:Tools $Script)) @Arguments 2>&1 | Out-String
         [pscustomobject]@{ Output = $out; Code = $LASTEXITCODE }
     }
@@ -118,6 +123,16 @@ Describe 'docker-up.sh / docker-down.sh' {
             $r = Invoke-Sh $base 'docker-up.sh'
             $r.Code | Should -Not -Be 0
             $r.Output | Should -Match 'leaked into the global namespace'
+            Test-Path (Join-Path $base 'dockerd.args') | Should -BeFalse
+        } finally { Stop-Fake $base }
+    }
+
+    It 'aborts before any mount when / stays shared after the propagation call' {
+        $base = New-FakePhone -SharedRoot
+        try {
+            $r = Invoke-Sh $base 'docker-up.sh'
+            $r.Code | Should -Not -Be 0
+            $r.Output | Should -Match 'could not make / private'
             Test-Path (Join-Path $base 'dockerd.args') | Should -BeFalse
         } finally { Stop-Fake $base }
     }

@@ -22,8 +22,16 @@ REQUIRED_CONTROLLERS="cpuset cpu memory pids devices"
 
 log() { printf '%s docker-daemon: %s\n' "$(date '+%F %T')" "$*"; }
 
+# Android's toybox 0.8.12 (9 Pro, 2026-10-30): `--make-rprivate /` fails (it reads /etc/fstab) and
+# `-o rprivate / /` returns 0 but leaves / shared; only `-o rprivate none /` takes. So the result is
+# read back from mountinfo, never trusted from the exit code.
+root_is_private() {
+    ! grep -E '^[0-9]+ [0-9]+ [^ ]+ / / ' "${DOCKER_SELF_MOUNTINFO:-/proc/self/mountinfo}" 2>/dev/null | grep -q ' shared:'
+}
+
 make_mounts_private() {
-    mount --make-rprivate / 2>/dev/null || mount -o rprivate / / 2>/dev/null || mount -o remount,rprivate / 2>/dev/null
+    mount -o rprivate none / 2>/dev/null || mount --make-rprivate / 2>/dev/null
+    root_is_private || die "could not make / private in dockerd's namespace; aborted before touching Android"
 }
 
 # The tmpfs must never be visible in init's namespace. Check, and abort if it leaked.
