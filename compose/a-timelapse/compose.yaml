@@ -1,0 +1,16 @@
+# Role A - camera time-lapse. A container CANNOT take the photo: Android's cameras sit behind the
+# camera HAL (binder, SELinux), there is no /dev/videoN for them. The HOST captures
+# (host-capture.sh in Termux, Termux:API's termux-camera-photo). This container only serves the
+# photos read-only over HTTP on the tailnet (http://<phone tailnet name or IP>:8081/) and prunes old ones.
+name: timelapse
+services:
+  gallery:
+    image: alpine:3.22
+    restart: unless-stopped
+    network_mode: host
+    init: true
+    environment:
+      KEEP_DAYS: "60"
+    entrypoint: ["/bin/sh", "-c", "while :; do find /photos -name '*.jpg' -mtime +$${KEEP_DAYS} -delete; sleep 86400; done & exec httpd -f -p 8081 -h /photos"]
+    volumes:
+      - /data/data/com.termux/files/home/timelapse:/photos

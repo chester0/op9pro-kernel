@@ -1,0 +1,18 @@
+# Role B - neoClaw edge worker: an ssh-reachable Alpine box (python3, git, curl) on the phone.
+# Reachable over Tailscale on port 2222 of the phone's tailnet address (the phone's own Tailscale app provides the tailnet;
+# host networking means the container listens on it exactly like Termux's sshd on 8022 does).
+# Host networking also works when docker-up.sh ended up in "host-only" mode (no iptables).
+# Put the Evo's public key in /data/docker/shared/b-worker/authorized_keys first (see ../README.md).
+name: neoclaw-worker
+services:
+  worker:
+    build: .
+    image: neoclaw-worker:local
+    restart: unless-stopped
+    network_mode: host
+    init: true
+    environment:
+      SSH_PORT: "2222"
+    volumes:
+      # authorized_keys in, persistent ssh host key and the worker's files out
+      - /data/docker/shared/b-worker:/work
