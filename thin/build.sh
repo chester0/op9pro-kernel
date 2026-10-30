@@ -11,11 +11,13 @@
 #   thin/build.sh image          build the build container image
 #   thin/build.sh build          run the container: config, build, package (needs fetch+patch+image)
 #   thin/build.sh verify         3 options in .config, apk_sign.c vs upstream, moby check-config, sha256s
+#   thin/build.sh crc            dump the built vmlinux's exported-symbol CRCs (kABI check against a baseline)
 #
 # Environment (all optional):
 #   PINS_FILE   pins to use (default: thin/pins.env)         THIN_HOME  work root (default: ~/op9thin)
 #   BUILD_JOBS  make -j (default 8)                           BUILD_MEM  container memory limit (default 8g)
 #   OUT_DIR     where finished artifacts are copied (default: $THIN_HOME/out/thin-<date>)
+#   THIN_PATCHES=none   build the maintainer's unpatched source (baseline for A/B comparison)
 set -euo pipefail
 
 THIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -165,8 +167,24 @@ apply_dir() {
 }
 
 cmd_patch() {
+    if [ "${THIN_PATCHES:-all}" = none ]; then
+        # Baseline: the maintainer's exact source, for A/B comparison (crc, size). Restores tracked files only.
+        git -C "${KERNEL_DIR}" checkout -q -- .
+        git -C "${VANILLASU_DIR}" checkout -q -- .
+        log "THIN_PATCHES=none: trees restored, no patch applied"
+        return 0
+    fi
     apply_dir "${KERNEL_DIR}" "${THIN_DIR}/patches/kernel"
     apply_dir "${VANILLASU_DIR}" "${THIN_DIR}/patches/vanillasu"
+}
+
+# Exported-symbol CRCs (modversions) of the built vmlinux. The phone's vendor modules are checked against them,
+# so a patch that changes a CRC could stop a vendor module loading. Compare a baseline's crc.txt to ours.
+cmd_crc() {
+    load_pins
+    "${CACHE_DIR}/clang/bin/llvm-nm" "${KERNEL_DIR}/out/vmlinux" |
+        awk '$3 ~ /^__crc_/ { print $3, $1 }' | LC_ALL=C sort > "${OUT_DIR}/crc.txt"
+    log "$(wc -l < "${OUT_DIR}/crc.txt") exported-symbol CRCs -> ${OUT_DIR}/crc.txt"
 }
 
 cmd_image() {
@@ -205,7 +223,7 @@ cmd_build() {
     echo "build_seconds=$(($(now) - start))" | tee -a "${METRICS_FILE}"
     # cgroup peak counts page cache too (it is reclaimable); the working-set peak is the honest RAM need.
     grep -h MEMORY_PEAK_BYTES "${OUT_DIR}/build.log" | tee -a "${METRICS_FILE}" || true
-    awk -F'[ /]+' '{ v = $1; if (v ~ /GiB$/) { sub(/GiB/, "", v); v *= 1024 } else if (v ~ /MiB$/) { sub(/MiB/, "", v) } else next
+    awk -F'[ /]+' '{ v = $1; if (v ~ /GiB$/) { sub(/GiB/, "", v); v = v * 1024 } else if (v ~ /MiB$/) { sub(/MiB/, "", v); v = v + 0 } else next
                      if (v > m) m = v } END { printf "peak_working_set_mib=%d\n", m }' "${OUT_DIR}/memory.csv" |
         tee -a "${METRICS_FILE}"
 }
@@ -284,5 +302,6 @@ case "${1:-}" in
     image) cmd_image ;;
     build) cmd_build ;;
     verify) cmd_verify ;;
-    *) sed -n '2,19p' "${BASH_SOURCE[0]}"; exit 2 ;;
+    crc) cmd_crc ;;
+    *) sed -n '2,22p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac
