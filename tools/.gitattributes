@@ -1,0 +1,2 @@
+# 2026-10-31: these shell scripts run on the phone; a CRLF checkout on Windows would break them.
+*.sh text eol=lf
