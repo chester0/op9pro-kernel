@@ -1,8 +1,8 @@
 # Test boot of the thin kernel on the OnePlus 9 Pro (lemonadep), before anything is flashed
 
 Written 2026-10-31. Phone: A/B, adb serial `5d7a3c0` over USB, KernelSU root, **dead touchscreen** (every step is
-adb or fastboot; only the hardware buttons are used). It runs the maintainer's VanillaKernel `e615f34` on `boot_a`
-(flashed 2026-10-30; `vbmeta_a` is the disabled header, so a changed boot image is not rejected at power-up).
+adb or fastboot; only the hardware buttons are used). It runs the maintainer's VanillaKernel `e615f34` on the active boot slot
+(flashed 2026-10-30 to `boot_a`; the phone has been on slot b since 31 Oct, so every command below reads the slot from `ro.boot.slot_suffix`; `vbmeta_a` is the disabled header, so a changed boot image is not rejected at power-up).
 
 Two candidates, built in `output\thin-20261030\` (see [README.md](README.md), "kABI"):
 
@@ -43,7 +43,7 @@ match the `SHA256SUMS` beside it; the dumped boot image's kernel is **not** the 
 `/proc/version`); a pull differs from what the phone hashed; a repacked image's kernel is not the build's, or the
 image is larger than the partition dump. It prints the files and the rollback command at the end.
 
-Result in `$Out`: `boot_a-backup-<sha8>.img` (today's boot image, never overwritten or deleted by the tool),
+Result in `$Out`: `boot<slot>-backup-<sha8>.img` (today's boot image of the active slot, never overwritten or deleted by the tool),
 `testboot-full.img`, `testboot-skipipvs.img`, `SHA256SUMS`. Record the three hashes in the table at the end of this
 file and commit that edit. Cross-check: the backup should equal `output\vanilla-e615f34\boot-vanilla-e615f34.img`
 (sha256 `c3c812436c677062cddfa15fc28feef283e83b0810f533e112b25e38f84559f4`) if that file is what was flashed on
@@ -119,9 +119,10 @@ recorded 30 Oct command in the repo, only the image it produced (`output\vanilla
 Flash **the exact image that was just test-booted**, so what runs is what was checked:
 
     $W = 'full'                                         # or 'skipipvs'
+    $Slot = (adb -s $S shell getprop ro.boot.slot_suffix).Trim()   # the ACTIVE slot: _a or _b (the phone is on _b since 31 Oct)
     adb -s $S reboot bootloader
-    fastboot -s $S getvar current-slot                  # must be: a (the slot the backup came from)
-    fastboot -s $S flash boot_a "$Out\testboot-$W.img"  # boot_a only; never vbmeta, never boot_b
+    fastboot -s $S getvar current-slot                  # must equal $Slot without the underscore (the slot the backup came from)
+    fastboot -s $S flash "boot$Slot" "$Out\testboot-$W.img"  # the active boot slot only; never vbmeta, never the other slot
     fastboot -s $S reboot
 
 Do not pass `--disable-verity --disable-verification`: `vbmeta_a` is already the disabled header and stays as is.
@@ -133,19 +134,20 @@ Verify after boot: `adb -s $S shell "uname -r; cat /proc/version"` shows `thin@o
 `EXPECT_IPVS=yes|no sh $Dev/testboot-check.sh` again (same flag as the winner's test boot); and that the partition
 holds the image (size = the file's length in bytes, `(Get-Item "$Out\testboot-$W.img").Length`):
 
-    adb -s $S shell "su -c 'head -c <size> /dev/block/by-name/boot_a | sha256sum'"   # equals the image's sha256
+    adb -s $S shell "su -c 'head -c <size> /dev/block/by-name/boot$Slot | sha256sum'"   # equals the image's sha256
 
 ### 7. Rollback (to the maintainer's e615f34 as it was on 2026-10-30)
 
 From the bootloader (`adb -s $S reboot bootloader`, or, if the phone does not reach Android, hold power + volume
 down; no touch needed):
 
-    fastboot -s $S flash boot_a (Get-ChildItem $Out\boot_a-backup-*.img).FullName      # one file; check the name
+    fastboot -s $S flash "boot$Slot" (Get-ChildItem "$Out\boot$Slot-backup-*.img").FullName   # one file; check the name
     fastboot -s $S reboot
 
-Check the file's sha256 against `$Out\SHA256SUMS` and the Record below before flashing it. If `boot_a` ever fails to
-boot, the bootloader may switch to `boot_b`: `fastboot getvar current-slot` shows where it is; flash the backup to the
-slot it was taken from. The older factory-state image `output\vanilla-e615f34\boot-stock.img` (sha256
+`$Slot` is the active slot read in step 6 (`ro.boot.slot_suffix`); the backup file name carries the same suffix. Check
+the file's sha256 against `$Out\SHA256SUMS` and the Record below before flashing it. If the active slot ever fails to
+boot, the bootloader may switch to the other one: `fastboot getvar current-slot` shows where it is; flash the backup to
+the slot it was taken from. The older factory-state image `output\vanilla-e615f34\boot-stock.img` (sha256
 `33ff9fe0783fa53a5fa774a70918e182070779da45d586263b79df9e79b817ac`, taken 30 Oct before the maintainer's kernel) is
 the second line of defence; it is not today's kernel.
 
@@ -162,7 +164,7 @@ silent pass.
 
 | File | SHA-256 |
 |------|---------|
-| `boot_a-backup-<sha8>.img` (today's boot_a) | |
+| `boot<slot>-backup-<sha8>.img` (today's active-slot boot) | |
 | `testboot-full.img` | |
 | `testboot-skipipvs.img` | |
 | Tested / decision / date | |
