@@ -1,0 +1,2 @@
+# Everything here runs in Linux (WSL, a container) or is applied with git apply: LF only, never CRLF.
+* text eol=lf
