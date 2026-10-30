@@ -3,6 +3,8 @@
 # no kernel, no container), so it is cheap; the real build is a manual run (thin/README.md), not a test.
 # 2026-10-30: tests/*.Tests.ps1 cover the Docker-on-the-phone tooling (tools/docker-*.sh, tools/push-docker.ps1):
 # Pester 5 with a fake adb, and the shell scripts under Git's bash with stubbed mount/unshare/dockerd.
+# 2026-10-31: tests/*.Tests.ps1 cover the test-boot tools (tools/testboot-*): Pester 5 with a fake adb for the
+# PowerShell side, and the on-phone shell scripts under Git's bash with stubbed lsmod/dmesg/ps/zcat.
 @{ Tests = @(
     @{ Glob = 'tests/*.Tests.ps1'; Phase = 'loop'; Run = 'pwsh -NoProfile -Command "Import-Module Pester -MinimumVersion 5.0; exit [int]((Invoke-Pester -Path {0} -Output Minimal -PassThru).Result -ne ''Passed'')"' }
     @{ Glob = 'thin/tests/*.Tests.ps1'; Phase = 'loop'; Run = 'pwsh -NoProfile -Command "Import-Module Pester -MinimumVersion 5.0; exit [int]((Invoke-Pester -Path {0} -Output Minimal -PassThru).Result -ne ''Passed'')"' }
