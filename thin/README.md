@@ -14,6 +14,11 @@ script, not a copy of the kernel.
 All pins are in [`pins.env`](pins.env). `build.sh` refuses any input that does not match its pin
 (`thin/tests/build.Tests.ps1` proves it).
 
+**Second source (2026-10-31): the ROM's own kernel, Levion.** The Vanilla build above does not boot on EvolutionX 17
+(its vendor modules are Levion's). `PINS_FILE=thin/pins-levion.env thin/build.sh all` builds Levion's `aox-ksun` with the
+same script and a Docker fragment, `thin/modcheck.py` checks it against the phone's vendor modules, and it was test-booted
+with Docker running: see [LEVION.md](LEVION.md).
+
 ## Patches
 
 | File | What | Size |

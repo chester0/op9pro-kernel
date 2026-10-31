@@ -81,17 +81,43 @@ setup_etc() {
     for ns in $DOCKER_DNS; do printf 'nameserver %s\n' "$ns" >>"$ETC_DIR/resolv.conf"; done
 }
 
-# overlay2 if the kernel + /data filesystem accept it, else vfs (slow, big, but works).
-pick_storage_driver() {
-    t="$DOCKER_ROOT/.overlay-test"
+# overlay_probe DIR: can an overlay with its upper and work dirs on DIR be mounted?
+overlay_probe() {
+    t="$1/.overlay-test"
     mkdir -p "$t/l" "$t/u" "$t/w" "$t/m"
     if mount -t overlay overlay -o "lowerdir=$t/l,upperdir=$t/u,workdir=$t/w" "$t/m" 2>/dev/null; then
         umount "$t/m"
+        rm -rf "$t"
+        return 0
+    fi
+    rm -rf "$t"
+    return 1
+}
+
+# 2026-10-31 (9 Pro, Levion kernel): overlayfs refuses an upper on /data ("filesystem not supported": f2fs with
+# casefold/encryption). An ext4 image on a loop device is fine. Mounted over the data-root inside dockerd's private
+# mount namespace only, so Android never sees it. Sparse file: it uses disk as images are pulled.
+mount_ext4_data_root() {
+    img="$DOCKER_BASE/data.img"
+    if [ ! -f "$img" ]; then
+        if ! { truncate -s "${DOCKER_IMG_SIZE:-8G}" "$img" && mke2fs -t ext4 -q -F "$img"; } 2>/dev/null; then
+            rm -f "$img"
+            return 1
+        fi
+    fi
+    mount -t ext4 -o loop,noatime "$img" "$DOCKER_ROOT" 2>/dev/null
+}
+
+# overlay2 if the kernel accepts it on /data or, failing that, on an ext4 image; else vfs (slow, big, but works).
+pick_storage_driver() {
+    if overlay_probe "$DOCKER_ROOT"; then
+        echo overlay2
+    elif [ "${DOCKER_EXT4_IMAGE:-auto}" != 0 ] && mount_ext4_data_root && overlay_probe "$DOCKER_ROOT"; then
+        log "overlay2 on an ext4 image ($DOCKER_BASE/data.img) mounted at the data-root" >&2
         echo overlay2
     else
         echo vfs
     fi
-    rm -rf "$t"
 }
 
 # Bridge networking needs a working iptables nat table.
@@ -115,9 +141,10 @@ main() {
     make_mounts_private
     setup_cgroups
     setup_etc
+    # Before the root view: that view binds in every mount of this namespace, and the ext4 image may be one.
+    driver=$(pick_storage_driver)
     build_root_view
 
-    driver=$(pick_storage_driver)
     mode=$(pick_network_mode)
     printf '%s\n' "$mode" >"$DOCKER_MODE_FILE"
     log "storage driver: $driver, network mode: $mode"
@@ -131,6 +158,8 @@ main() {
   "ipv6": false,
   "ip6tables": false,
   "features": {"containerd-snapshotter": false},
+  "runtimes": {"nomq": {"path": "$DOCKER_BASE/tools/docker-runc-nomq.sh"}},
+  "default-runtime": "nomq",
   "log-level": "info"
 }
 EOF
