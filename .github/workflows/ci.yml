@@ -10,7 +10,7 @@ name: CI
 # python-ci.yml, so the two ruff commands live here.
 on:
   pull_request:
-    paths: ['**.py']
+    paths: ['**.py', '.github/workflows/ci.yml']
   workflow_dispatch:
 
 permissions:
