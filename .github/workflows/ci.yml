@@ -1,0 +1,26 @@
+name: CI
+
+# 2026-10-31 (Chester: git hooks are gitleaks-only now, "CI for lint expensive"): a pull request lints the Python files it changed
+# (ruff check and ruff format --check, ruff's defaults: the repo has no ruff.toml), from chester0/platform's python-ci.yml, on the
+# Evo. No tests here: the kernel build and the phone tests run on the machines. PowerShell lint is not set up (no PSScriptAnalyzer
+# settings or .standards wrapper in this repo).
+on:
+  pull_request:
+    paths: ['**.py']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    uses: chester0/platform/.github/workflows/python-ci.yml@main
+    with:
+      # The fallback is 'evo', not a hosted label, so an unset variable queues for the runner instead of billing.
+      runs-on: ${{ vars.CI_RUNS_ON_HEAVY || 'evo' }}
+      requirements-file: ''
+      test-command: ''
