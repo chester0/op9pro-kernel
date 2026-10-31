@@ -8,4 +8,6 @@
 @{ Tests = @(
     @{ Glob = 'tests/*.Tests.ps1'; Phase = 'loop'; Run = 'pwsh -NoProfile -Command "Import-Module Pester -MinimumVersion 5.0; exit [int]((Invoke-Pester -Path {0} -Output Minimal -PassThru).Result -ne ''Passed'')"' }
     @{ Glob = 'thin/tests/*.Tests.ps1'; Phase = 'loop'; Run = 'pwsh -NoProfile -Command "Import-Module Pester -MinimumVersion 5.0; exit [int]((Invoke-Pester -Path {0} -Output Minimal -PassThru).Result -ne ''Passed'')"' }
+    # 2026-10-31: thin/modcheck.py (the vendor-module compatibility check before a boot) is Python: unittest.
+    @{ Glob = 'thin/tests/test_*.py'; Phase = 'loop'; Run = 'python -I {0}' }
 ) }
