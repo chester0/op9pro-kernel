@@ -32,6 +32,7 @@ BeforeAll {
             [string]$IptablesRc = '0', [string]$OverlayRc = '0', [string]$Uid = '0',
             [string]$RootOverlayRc = '0',          # exit code of the root-view overlay mount (source name dockerroot)
             [switch]$RootOverlayFirstFails,        # the first root-view overlay attempt (tmpfs upper) is refused
+            [switch]$ProbeFirstFails,              # the first storage probe (overlay on /data) is refused, as f2fs does
             [switch]$LeakedCgroup, [switch]$LeakedOverlay, [switch]$SharedRoot, [switch]$FailBind
         )
         $base = Join-Path ([IO.Path]::GetTempPath()) "docker-up-test-$([guid]::NewGuid().ToString('N'))"
@@ -41,12 +42,16 @@ BeforeAll {
         Write-Stub $bin 'id' "echo $Uid"
         Write-Stub $bin 'getenforce' 'echo Enforcing'
         Write-Stub $bin 'iptables' "exit $IptablesRc"
-        Write-Stub $bin 'ip' 'exit 0'
+        Write-Stub $bin 'ip' 'echo "$*" >> "$DOCKER_BASE/ip.log"; exit 0'
+        # the ext4-image fallback: no real mke2fs, and a truncate that makes an empty file instead of a sparse 8G one
+        Write-Stub $bin 'mke2fs' 'echo "$*" >> "$DOCKER_BASE/mke2fs.log"; exit 0'
+        Write-Stub $bin 'truncate' 'for a; do last="$a"; done; : > "$last"'
         Write-Stub $bin 'unshare' 'shift; exec "$@"'
         # mount stub: logs every call; the storage-driver probe (plain "overlay" source) fails with $OverlayRc,
         # the root-view overlay (source "dockerroot") with $RootOverlayRc, once only when asked to, and a
         # bind of a path called fail-me always fails.
         $firstFails = if ($RootOverlayFirstFails) { '1' } else { '0' }
+        $probeRefusal = if ($ProbeFirstFails) { '1' } else { '0' }
         Write-Stub $bin 'mount' @"
 echo "`$*" >> "`$DOCKER_BASE/mount.log"
 case "`$*" in
@@ -54,7 +59,9 @@ case "`$*" in
     *dockerroot*)
         if [ $firstFails = 1 ] && [ ! -e "`$DOCKER_BASE/.ov-tried" ]; then : > "`$DOCKER_BASE/.ov-tried"; exit 1; fi
         exit $RootOverlayRc;;
-    *overlay*) exit $OverlayRc;;
+    *overlay*)
+        if [ $probeRefusal = 1 ] && [ ! -e "`$DOCKER_BASE/.probe-tried" ]; then : > "`$DOCKER_BASE/.probe-tried"; exit 1; fi
+        exit $OverlayRc;;
 esac
 exit 0
 "@
@@ -278,6 +285,68 @@ Describe 'docker-up.sh / docker-down.sh' {
         } finally { Stop-Fake $base }
     }
 
+    It 'puts overlay2 on an ext4 image when overlay is refused on /data, before the root view is built' {
+        $base = New-FakePhone -ProbeFirstFails
+        try {
+            $env:DOCKER_IMG_SIZE = '1M'
+            $r = Invoke-Sh $base 'docker-up.sh'
+            $r.Code | Should -Be 0 -Because $r.Output
+            (Get-Content (Join-Path $base 'daemon.json') -Raw) | Should -Match '"storage-driver": "overlay2"'
+            Test-Path (Join-Path $base 'data.img') | Should -BeTrue
+            (Get-Content (Join-Path $base 'mke2fs.log') -Raw) | Should -Match 'ext4'
+            $mounts = @(Get-Content (Join-Path $base 'mount.log'))
+            $ext4 = [array]::FindIndex($mounts, [Predicate[string]] { $args[0] -match '-t ext4 .*loop' })
+            $root = [array]::FindIndex($mounts, [Predicate[string]] { $args[0] -match 'dockerroot' })
+            $ext4 | Should -BeGreaterOrEqual 0 -Because ($mounts -join "`n")
+            $ext4 | Should -BeLessThan $root -Because 'the root view binds in every mount of the namespace, so the image must be mounted first'
+        } finally { Remove-Item Env:DOCKER_IMG_SIZE -ErrorAction SilentlyContinue; Stop-Fake $base }
+    }
+
+    It 'keeps vfs when overlay is refused on /data and on the ext4 image too' {
+        $base = New-FakePhone -OverlayRc '1'
+        try {
+            $env:DOCKER_IMG_SIZE = '1M'
+            (Invoke-Sh $base 'docker-up.sh').Code | Should -Be 0
+            (Get-Content (Join-Path $base 'daemon.json') -Raw) | Should -Match '"storage-driver": "vfs"'
+        } finally { Remove-Item Env:DOCKER_IMG_SIZE -ErrorAction SilentlyContinue; Stop-Fake $base }
+    }
+
+    It 'does not build an ext4 image when DOCKER_EXT4_IMAGE=0' {
+        $base = New-FakePhone -ProbeFirstFails
+        try {
+            $env:DOCKER_EXT4_IMAGE = '0'
+            (Invoke-Sh $base 'docker-up.sh').Code | Should -Be 0
+            Test-Path (Join-Path $base 'data.img') | Should -BeFalse
+            (Get-Content (Join-Path $base 'daemon.json') -Raw) | Should -Match '"storage-driver": "vfs"'
+        } finally { Remove-Item Env:DOCKER_EXT4_IMAGE -ErrorAction SilentlyContinue; Stop-Fake $base }
+    }
+
+    It 'registers the mqueue-free runtime as the default one' {
+        $base = New-FakePhone
+        try {
+            (Invoke-Sh $base 'docker-up.sh').Code | Should -Be 0
+            $json = Get-Content (Join-Path $base 'daemon.json') -Raw
+            $json | Should -Match '"default-runtime": "nomq"'
+            $json | Should -Match '"nomq": \{"path": "[^"]*/tools/docker-runc-nomq\.sh"\}'
+        } finally { Stop-Fake $base }
+    }
+
+    It 'adds an ip rule for replies to containers next to the outbound one, and down removes both' {
+        $base = New-FakePhone
+        try {
+            $env:DOCKER_ROUTE_TABLE = 'wlan0'
+            (Invoke-Sh $base 'docker-up.sh').Code | Should -Be 0
+            $rules = Get-Content (Join-Path $base 'ip.log') -Raw
+            $rules | Should -Match 'rule add pref 5999 from 172\.16\.0\.0/12 lookup wlan0'
+            $rules | Should -Match 'rule add pref 5998 to 172\.16\.0\.0/12 lookup main'
+            Get-ChildItem (Join-Path $base 'newroot') | Remove-Item -Recurse -Force
+            (Invoke-Sh $base 'docker-down.sh').Code | Should -Be 0
+            $rules = Get-Content (Join-Path $base 'ip.log') -Raw
+            $rules | Should -Match 'rule del pref 5999'
+            $rules | Should -Match 'rule del pref 5998'
+        } finally { Remove-Item Env:DOCKER_ROUTE_TABLE -ErrorAction SilentlyContinue; Stop-Fake $base }
+    }
+
     It 'refuses to run unless root' {
         $base = New-FakePhone -Uid '2000'
         try {
@@ -309,6 +378,68 @@ Describe 'docker-up.sh / docker-down.sh' {
             $again.Code | Should -Be 0
             $again.Output | Should -Match 'not running'
         } finally { Stop-Fake $base }
+    }
+}
+
+Describe 'docker-runc-nomq.sh' {
+    BeforeAll {
+        $script:Mqueue = '{"destination":"/dev/mqueue","type":"mqueue","source":"mqueue","options":["nosuid","noexec","nodev"]}'
+        $script:Config = '{"mounts":[{"destination":"/proc","type":"proc"},' + $script:Mqueue + ',{"destination":"/dev/shm","type":"tmpfs"}]}'
+    }
+
+    # A bundle with a config.json, a fake runc that records its arguments, and a /proc/filesystems stand-in.
+    function script:New-Bundle([string]$Filesystems) {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) "runc-nomq-test-$([guid]::NewGuid().ToString('N'))"
+        New-Item -ItemType Directory -Path (Join-Path $dir 'bundle') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $dir 'bundle/config.json'), $script:Config)
+        [IO.File]::WriteAllText((Join-Path $dir 'filesystems'), $Filesystems)
+        Write-Stub $dir 'runc' 'echo "$*" > "$(dirname "$0")/runc.args"'
+        $dir
+    }
+
+    function script:Invoke-Nomq([string]$Dir, [string[]]$RuncArgs) {
+        $env:DOCKER_REAL_RUNC = ToSh (Join-Path $Dir 'runc')
+        $env:DOCKER_PROC_FILESYSTEMS = ToSh (Join-Path $Dir 'filesystems')
+        try { & bash (ToSh (Join-Path $script:Tools 'docker-runc-nomq.sh')) @RuncArgs 2>&1 | Out-Null; $LASTEXITCODE }
+        finally { Remove-Item Env:DOCKER_REAL_RUNC, Env:DOCKER_PROC_FILESYSTEMS -ErrorAction SilentlyContinue }
+    }
+
+    It 'removes the mqueue mount from the bundle on a kernel without POSIX_MQUEUE, and runs the real runc with the same arguments' {
+        $dir = New-Bundle "nodev`tsysfs`nnodev`tproc`n"
+        try {
+            $bundle = ToSh (Join-Path $dir 'bundle')
+            Invoke-Nomq $dir @('--root', '/r', 'create', '--bundle', $bundle, 'cid') | Should -Be 0
+            $config = Get-Content (Join-Path $dir 'bundle/config.json') -Raw
+            $config | Should -Not -Match 'mqueue'
+            { $config | ConvertFrom-Json } | Should -Not -Throw
+            ($config | ConvertFrom-Json).mounts.destination | Should -Be @('/proc', '/dev/shm')
+            (Get-Content (Join-Path $dir 'runc.args') -Raw).Trim() | Should -Be "--root /r create --bundle $bundle cid"
+        } finally { Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction SilentlyContinue }
+    }
+
+    It 'understands --bundle=DIR' {
+        $dir = New-Bundle "nodev`tproc`n"
+        try {
+            Invoke-Nomq $dir @('create', "--bundle=$(ToSh (Join-Path $dir 'bundle'))", 'cid') | Should -Be 0
+            (Get-Content (Join-Path $dir 'bundle/config.json') -Raw) | Should -Not -Match 'mqueue'
+        } finally { Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction SilentlyContinue }
+    }
+
+    It 'leaves the bundle alone when the kernel has mqueue' {
+        $dir = New-Bundle "nodev`tproc`nnodev`tmqueue`n"
+        try {
+            Invoke-Nomq $dir @('create', '--bundle', (ToSh (Join-Path $dir 'bundle')), 'cid') | Should -Be 0
+            (Get-Content (Join-Path $dir 'bundle/config.json') -Raw) | Should -Be $script:Config
+        } finally { Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction SilentlyContinue }
+    }
+
+    It 'passes a call without a bundle straight through' {
+        $dir = New-Bundle "nodev`tproc`n"
+        try {
+            Invoke-Nomq $dir @('--root', '/r', 'delete', 'cid') | Should -Be 0
+            (Get-Content (Join-Path $dir 'runc.args') -Raw).Trim() | Should -Be '--root /r delete cid'
+            (Get-Content (Join-Path $dir 'bundle/config.json') -Raw) | Should -Be $script:Config
+        } finally { Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction SilentlyContinue }
     }
 }
 

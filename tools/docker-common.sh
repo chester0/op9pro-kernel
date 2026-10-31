@@ -21,6 +21,12 @@ DOCKER_MODE_FILE="$DOCKER_RUN/mode"               # "bridge" or "host-only"
 DOCKER_DIAG="$DOCKER_LOG_DIR/diag.txt"
 DOCKER_INIT_MOUNTINFO="${DOCKER_INIT_MOUNTINFO:-/proc/1/mountinfo}" # init's (Android's global) mount view
 DOCKER_BRIDGE_CIDR="${DOCKER_BRIDGE_CIDR:-172.16.0.0/12}" # gitleaks:allow Docker's default bridge range, not a machine fact
+# ip rule priorities, below Android's netd rules (10000+). 2026-10-31 (9 Pro): Android has no "from all lookup main"
+# rule (only "32000 unreachable" after its own tables), so the bridge's own route is never consulted: replies to a
+# container, arriving from the network, were unreachable. ROUTE_PREF_OUT sends container traffic out; ROUTE_PREF_IN
+# sends traffic addressed to the bridge range to the main table, where docker0's route is.
+ROUTE_PREF_OUT=5999
+ROUTE_PREF_IN=5998
 
 # 2026-10-30: Android has no /etc/resolv.conf, and Go (dockerd) then talks to 127.0.0.1:53.
 DOCKER_DNS="${DOCKER_DNS:-1.1.1.1 8.8.8.8}"

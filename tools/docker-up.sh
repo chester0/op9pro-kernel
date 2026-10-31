@@ -10,7 +10,6 @@ DIR=$(dirname "$0")
 # shellcheck source=docker-common.sh
 . "$DIR/docker-common.sh"
 
-ROUTE_PREF=5999       # below Android's netd rules (10000+), so containers reach the default network
 START_TIMEOUT=90
 PIDFILE_GRACE=20
 
@@ -30,8 +29,12 @@ route_fix() {
         say "WARN: no default route found - containers have no internet until Wi-Fi is up; then run docker-down.sh and docker-up.sh again"
         return 0
     fi
-    ip rule del pref "$ROUTE_PREF" 2>/dev/null
-    ip rule add pref "$ROUTE_PREF" from "$DOCKER_BRIDGE_CIDR" lookup "$tbl" && say "route: containers -> table $tbl (ip rule pref $ROUTE_PREF)"
+    ip rule del pref "$ROUTE_PREF_OUT" 2>/dev/null
+    ip rule del pref "$ROUTE_PREF_IN" 2>/dev/null
+    ip rule add pref "$ROUTE_PREF_OUT" from "$DOCKER_BRIDGE_CIDR" lookup "$tbl" &&
+        say "route: containers -> table $tbl (ip rule pref $ROUTE_PREF_OUT)"
+    ip rule add pref "$ROUTE_PREF_IN" to "$DOCKER_BRIDGE_CIDR" lookup main &&
+        say "route: replies to containers -> main table (ip rule pref $ROUTE_PREF_IN)"
 }
 
 wait_ready() {

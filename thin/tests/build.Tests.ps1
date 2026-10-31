@@ -72,3 +72,25 @@ Describe 'thin/build.sh pin checks' -Skip:(-not $script:WslAvailable) {
         $r.Output | Should -Match 'records VanillaSU'
     }
 }
+
+Describe 'thin/build.sh second source (RECIPE=levion)' -Skip:(-not $script:WslAvailable) {
+    It 'fetches a source with no VanillaSU pin, into its own tree folder' {
+        $r = Invoke-Build 'levion' 'fetch-kernel'
+        $r.ExitCode | Should -Be 0 -Because $r.Output
+        $r.Output | Should -Match 'no VanillaSU submodule'
+        & wsl -d Ubuntu -- test -d "$script:Fx/home/src/kernel-levion/.git"
+        $LASTEXITCODE | Should -Be 0
+    }
+
+    It 'still checks the kernel commit pin of the second source' {
+        $r = Invoke-Build 'levion-bad-kernel' 'fetch-kernel'
+        $r.ExitCode | Should -Not -Be 0
+        $r.Output | Should -Match 'cannot fetch pinned commit'
+    }
+
+    It 'refuses an unknown RECIPE' {
+        $r = Invoke-Build 'bad-recipe' 'fetch-kernel'
+        $r.ExitCode | Should -Not -Be 0
+        $r.Output | Should -Match 'unknown RECIPE'
+    }
+}

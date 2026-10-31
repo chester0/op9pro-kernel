@@ -49,6 +49,14 @@ load_pins() {
     [ -f "${PINS_FILE}" ] || die "pins file not found: ${PINS_FILE}"
     # shellcheck source=/dev/null
     . "${PINS_FILE}"
+    # 2026-10-31: a pins file may name a second source (RECIPE=levion, pins-levion.env). It gets its own tree
+    # folder, so fetching one source never discards the other's tree and build output.
+    RECIPE="${RECIPE:-vanilla}"
+    case "${RECIPE}" in vanilla | levion) ;; *) die "unknown RECIPE '${RECIPE}' in ${PINS_FILE} (vanilla or levion)" ;; esac
+    # THIN_FRAGMENT=<file in thin/fragments> builds a variant (used to find which option moves the module CRCs).
+    [ -z "${THIN_FRAGMENT:-}" ] || FRAGMENT_DEFCONFIG="fragments/${THIN_FRAGMENT}"
+    KERNEL_DIR="${SRC_DIR}/${KERNEL_DIRNAME:-kernel}"
+    VANILLASU_DIR="${KERNEL_DIR}/VanillaSU"
 }
 
 # fetch_file URL SHA256 DEST - download once, refuse any content whose sha256 is not the pin.
@@ -98,6 +106,10 @@ fetch_git() {
 fetch_kernel() {
     load_pins
     fetch_git "${KERNEL_URL}" "${KERNEL_SHA}" "${KERNEL_DIR}"
+    if [ -z "${VANILLASU_SHA:-}" ]; then
+        log "no VANILLASU_SHA in ${PINS_FILE}: this source has no VanillaSU submodule"
+        return 0
+    fi
     local gitlink
     gitlink="$(git -C "${KERNEL_DIR}" ls-tree HEAD VanillaSU | awk '{print $3}')"
     [ "${gitlink}" = "${VANILLASU_SHA}" ] ||
@@ -151,7 +163,10 @@ cmd_fetch() {
     fetch_kernel
     fetch_clang
     fetch_checkconfig
-    fetch_apksign_ref
+    # The apk_sign.c reference belongs to VanillaSU; Levion's KernelSU-Next is not patched by us.
+    if [ "${RECIPE}" = vanilla ]; then
+        fetch_apksign_ref
+    fi
 }
 
 # patch_skipped PATCH - true when THIN_SKIP (comma-separated words) names part of the patch's file name.
@@ -182,6 +197,13 @@ apply_dir() {
 }
 
 cmd_patch() {
+    load_pins
+    if [ "${RECIPE}" = levion ]; then
+        # Levion's change is a defconfig fragment merged inside the container, not a source patch.
+        git -C "${KERNEL_DIR}" checkout -q -- .
+        log "RECIPE=levion: no source patch; the Docker fragment ${FRAGMENT_DEFCONFIG} is merged at build time"
+        return 0
+    fi
     if [ "${THIN_PATCHES:-all}" = none ]; then
         # Baseline: the maintainer's exact source, for A/B comparison (crc, size). Restores tracked files only.
         git -C "${KERNEL_DIR}" checkout -q -- .
@@ -212,9 +234,18 @@ now() { date +%s; }
 cmd_build() {
     load_pins
     [ -x "${CACHE_DIR}/clang/bin/clang" ] || die "clang not fetched (run: build.sh fetch)"
-    [ -f "${KERNEL_DIR}/tools/build.sh" ] || die "kernel not fetched (run: build.sh fetch)"
+    [ -f "${KERNEL_DIR}/Makefile" ] || die "kernel not fetched (run: build.sh fetch)"
     mkdir -p "${OUT_DIR}" "${CCACHE_HOST_DIR}"
-    local zip_name="VanillaKernel-thin${THIN_SKIP:+-skip-${THIN_SKIP//,/-}}-${KERNEL_SHA:0:7}-${VANILLASU_SHA:0:7}.zip" start sampler
+    local zip_name="" fragment="${FRAGMENT_DEFCONFIG}" start sampler
+    if [ "${RECIPE}" = vanilla ]; then
+        zip_name="VanillaKernel-thin${THIN_SKIP:+-skip-${THIN_SKIP//,/-}}-${KERNEL_SHA:0:7}-${VANILLASU_SHA:0:7}.zip"
+    else
+        # The fragment lives in this repo (thin/fragments) and is mounted at /fragments; THIN_PATCHES=none builds
+        # Levion's own defconfig unchanged (the baseline for the CRC comparison).
+        fragment="/fragments/$(basename "${FRAGMENT_DEFCONFIG}")"
+        [ "${THIN_PATCHES:-all}" = none ] && fragment=""
+        [ -z "${fragment}" ] || [ -f "${THIN_DIR}/fragments/$(basename "${fragment}")" ] || die "fragment not found: ${fragment}"
+    fi
     start="$(now)"
     # Sample the container's working set (docker stats: usage minus reclaimable page cache) every 10 s.
     : > "${OUT_DIR}/memory.csv"
@@ -229,9 +260,10 @@ cmd_build() {
     docker run --rm --name op9thin-build \
         --user "$(id -u):$(id -g)" \
         --memory "${BUILD_MEM}" --memory-swap "${BUILD_MEM}" --cpus "${BUILD_JOBS}" \
-        -e "BASE_DEFCONFIG=${BASE_DEFCONFIG}" -e "FRAGMENT_DEFCONFIG=${FRAGMENT_DEFCONFIG}" \
+        -e "RECIPE=${RECIPE}" -e "BASE_DEFCONFIG=${BASE_DEFCONFIG}" -e "FRAGMENT_DEFCONFIG=${fragment}" \
         -e "ZIP_NAME=${zip_name}" -e "BUILD_JOBS=${BUILD_JOBS}" \
         -v "${KERNEL_DIR}:/src" -v "${CACHE_DIR}/clang/:/clang:ro" -v "${CCACHE_HOST_DIR}:/ccache" \
+        -v "${THIN_DIR}/fragments:/fragments:ro" \
         -v "${OUT_DIR}:/artifacts" \
         "${IMAGE_TAG}" 2>&1 | tee "${OUT_DIR}/build.log"
     kill "${sampler}" 2> /dev/null || true
@@ -243,8 +275,28 @@ cmd_build() {
         tee -a "${METRICS_FILE}"
 }
 
+# verify_levion: every option of our fragment is =y in the built .config, then moby check-config and sha256s.
+verify_levion() {
+    local cfg="${OUT_DIR}/config" opt
+    [ -f "${cfg}" ] || die "no built .config at ${cfg} (run: build.sh build)"
+    if [ "${THIN_PATCHES:-all}" != none ]; then
+        log "fragment options in the built .config:"
+        while IFS= read -r opt; do
+            grep -x "${opt}" "${cfg}" || die "${opt} is not in the built .config"
+        done < <(grep -E '^CONFIG_[A-Z0-9_]+=y$' "${THIN_DIR}/${FRAGMENT_DEFCONFIG}")
+    fi
+    log "moby check-config -> ${OUT_DIR}/check-config.txt"
+    bash "${CACHE_DIR}/check-config.sh" "${cfg}" > "${OUT_DIR}/check-config.txt" 2>&1 || true
+    log "sha256 of the artifacts:"
+    (cd "${OUT_DIR}" && sha256sum Image config | tee SHA256SUMS)
+}
+
 cmd_verify() {
     load_pins
+    if [ "${RECIPE}" = levion ]; then
+        verify_levion
+        return 0
+    fi
     local cfg="${OUT_DIR}/config" opt ref="${CACHE_DIR}/apk_sign.ref.c" mine="${VANILLASU_DIR}/kernel/manager/apk_sign.c"
     [ -f "${cfg}" ] || die "no built .config at ${cfg} (run: build.sh build)"
 

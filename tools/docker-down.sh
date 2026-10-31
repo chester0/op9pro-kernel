@@ -11,7 +11,6 @@ DIR=$(dirname "$0")
 # shellcheck source=docker-namespace.sh
 . "$DIR/docker-namespace.sh"
 
-ROUTE_PREF=5999
 STOP_TIMEOUT=40
 
 main() {
@@ -33,7 +32,8 @@ main() {
     fi
     rm -f "$DOCKER_SOCK" "$DOCKER_PIDFILE"
     clean_root_view
-    ip rule del pref "$ROUTE_PREF" 2>/dev/null
+    ip rule del pref "$ROUTE_PREF_OUT" 2>/dev/null
+    ip rule del pref "$ROUTE_PREF_IN" 2>/dev/null
     say "dockerd down"
 }
 
