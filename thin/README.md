@@ -45,7 +45,8 @@ Measured A/B (same source, same toolchain, `crc.txt` = `llvm-nm vmlinux | grep _
 So the IPv6 options are free; the IPVS match is the one that is not. Docker itself (bridge, NAT, overlay2) does not
 need IPVS; only swarm/overlay load balancing does. `THIN_SKIP=ipvs thin/build.sh ...` builds the variant without
 the IPVS patch: `VanillaKernel-thin-skip-ipvs-e615f34-1fadf98.zip`, whose CRCs equal the baseline's.
-Both zips were built; the choice is Chester's.
+Both zips were built; the choice is Chester's. To decide with evidence before flashing, boot each from RAM and
+check it against the installed kernel: [TESTBOOT.md](TESTBOOT.md).
 
 ## Run it
 
