@@ -1,9 +1,13 @@
 name: CI
 
 # 2026-10-31 (Chester: git hooks are gitleaks-only now, "CI for lint expensive"): a pull request lints the Python files it changed
-# (ruff check and ruff format --check, ruff's defaults: the repo has no ruff.toml), from chester0/platform's python-ci.yml, on the
-# Evo. No tests here: the kernel build and the phone tests run on the machines. PowerShell lint is not set up (no PSScriptAnalyzer
-# settings or .standards wrapper in this repo).
+# (ruff check and ruff format --check, ruff's defaults: the repo has no ruff.toml). No tests here: the kernel build and the phone
+# tests run on the machines. PowerShell lint is not set up (no PSScriptAnalyzer settings or .standards wrapper in this repo).
+#
+# 2026-10-31: this repo is PUBLIC, so the job runs on GitHub's hosted runner, which is free for public repositories (the monthly
+# minutes that ran out are for private repos). The Evo's self-hosted runner never serves a public repo (dotfiles ci-runner.ps1
+# refuses it: a pull request from a fork would run its code on the Evo), and a public repo cannot call platform's private
+# python-ci.yml, so the two ruff commands live here.
 on:
   pull_request:
     paths: ['**.py']
@@ -16,11 +20,37 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # The house pin (platform python-ci, standards).
+  RUFF_VERSION: 0.17.3
+
 jobs:
   python:
-    uses: chester0/platform/.github/workflows/python-ci.yml@main
-    with:
-      # The fallback is 'evo', not a hosted label, so an unset variable queues for the runner instead of billing.
-      runs-on: ${{ vars.CI_RUNS_ON_HEAVY || 'evo' }}
-      requirements-file: ''
-      test-command: ''
+    name: Python checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Depth 2: a pull request is checked out as a merge commit whose first parent is the base tip, so
+          # `git diff HEAD^1 HEAD` is the pull request's change with no fetch.
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Install ruff
+        run: python -m pip install --quiet "ruff==${RUFF_VERSION}"
+
+      - name: ruff on the changed Python files
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff --name-only --diff-filter=ACMR HEAD^1 HEAD -- '*.py')
+          if [ "${#changed[@]}" -eq 0 ]; then echo "no Python file changed"; exit 0; fi
+          ruff check "${changed[@]}"
+          ruff format --check "${changed[@]}"
