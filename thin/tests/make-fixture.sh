@@ -51,3 +51,8 @@ sed 's/^CHECKCONFIG_SHA256=.*/CHECKCONFIG_SHA256=0000000000000000000000000000000
     "${dir}/good.pins" > "${dir}/bad-file.pins"
 write_pins bad-kernel "${tree_sha}" "${zeros}" "${recorded_vsu}"
 write_pins bad-gitlink "${tree_sha}" "${repo_sha}" "2222222222222222222222222222222222222222"
+
+# Second-source pins (RECIPE=levion): no VANILLASU_* pin, its own tree folder; and a pins file with an unknown recipe.
+sed -e '/^VANILLASU_/d' -e '1i RECIPE=levion\nKERNEL_DIRNAME=kernel-levion' "${dir}/good.pins" > "${dir}/levion.pins"
+sed -e '1i RECIPE=bogus' "${dir}/good.pins" > "${dir}/bad-recipe.pins"
+sed "s/^KERNEL_SHA=.*/KERNEL_SHA=${zeros}/" "${dir}/levion.pins" > "${dir}/levion-bad-kernel.pins"

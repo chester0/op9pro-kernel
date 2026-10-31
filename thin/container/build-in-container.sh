@@ -27,6 +27,32 @@ export KBUILD_BUILD_HOST=op9pro-thin
 export KBUILD_BUILD_TIMESTAMP
 KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${epoch}")"
 
+if [ "${RECIPE:-vanilla}" = levion ]; then
+    # 2026-10-31: Levion's recipe (its .github/compile.sh: same make flags, "vendor/lahaina-qgki_defconfig"), plus
+    # our fragment merged with the kernel's own merge_config.sh. Only the Image is built: the phone keeps its
+    # vendor modules, and the exported-symbol CRCs that decide whether they load are in vmlinux.
+    make_flags=(O=out ARCH=arm64 LLVM=1 CC="ccache clang" LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy
+        OBJDUMP=llvm-objdump READELF=llvm-readelf OBJSIZE=llvm-size STRIP=llvm-strip
+        CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-)
+    make "${make_flags[@]}" "${BASE_DEFCONFIG}"
+    if [ -n "${FRAGMENT_DEFCONFIG}" ]; then
+        ARCH=arm64 LLVM=1 ./scripts/kconfig/merge_config.sh -m -O out out/.config "${FRAGMENT_DEFCONFIG}"
+        make "${make_flags[@]}" olddefconfig
+        while IFS= read -r opt; do
+            grep -qx "${opt}" out/.config || { echo "fragment option not applied: ${opt}" >&2; exit 1; }
+        done < <(grep -E '^CONFIG_[A-Z0-9_]+=y$' "${FRAGMENT_DEFCONFIG}")
+    fi
+    make -j"${BUILD_JOBS}" "${make_flags[@]}" Image
+    test -f out/arch/arm64/boot/Image
+    cp out/arch/arm64/boot/Image /artifacts/Image
+    cp out/.config /artifacts/config
+    ccache -s
+    if [ -r /sys/fs/cgroup/memory.peak ]; then
+        echo "MEMORY_PEAK_BYTES=$(cat /sys/fs/cgroup/memory.peak)"
+    fi
+    exit 0
+fi
+
 ./tools/build.sh config "${BASE_DEFCONFIG}" "${FRAGMENT_DEFCONFIG}"
 ./tools/check-fragment.sh "${FRAGMENT_DEFCONFIG}" out/.config
 ./tools/build.sh kernel
